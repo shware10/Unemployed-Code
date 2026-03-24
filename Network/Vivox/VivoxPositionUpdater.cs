@@ -9,7 +9,10 @@ using UnityEngine;
 /// </summary>
 public class VivoxPositionUpdater : NetworkBehaviour
 {
-    [SerializeField] Transform listener; //플레이어 카메라
+    // 플레이어 카메라
+    [SerializeField] Transform listener;
+    
+    // 업데이트 간격 
     [SerializeField] private WaitForSeconds interval = new WaitForSeconds(0.1f);
     
     public override void OnNetworkSpawn()
@@ -35,7 +38,7 @@ public class VivoxPositionUpdater : NetworkBehaviour
     }
     
     /// <summary>
-    /// 3d 채널상의 위치를 최신화하는 함수입니다.
+    /// 3d 채널상의 위치를 인터벌 간격으로 갱신하는 함수
     /// </summary>
     IEnumerator UpdateVoicePosition()
     {

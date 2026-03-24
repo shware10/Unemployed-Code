@@ -1,43 +1,57 @@
-using System;
-using System.Collections.Generic;
-using System.Threading.Tasks;
-using Unity.Collections;
-using Unity.Services.Vivox;
+using System; 
+using System.Collections.Generic; 
+using System.Threading.Tasks; 
+using Unity.Collections; 
+using Unity.Services.Vivox; 
 using UnityEngine;
 
+/// <summary>
+/// Vivox 음성 채팅 관리 싱글톤 클래스
+/// </summary>
 public class VivoxManager : MonoBehaviour
 {
     public static VivoxManager Instance;
 
-    // 가청거리 -> 어디까지 목소리가 들릴지 (0 < this)
+    // 최대 가청 거리
     [SerializeField] private int audibleDistance = 32;
 
-    // 대화적거리 어디까지 보통 목소리가 들릴지 == 어디서부터 희미해질지 (0 <= this <= audible)
+    // 일반 대화 거리 (이 거리부터 볼륨 감소 시작)
     [SerializeField] private int conversationalDistance = 1;
 
-    // 값이 1.0보다 크면 대화 거리에서 멀어질수록 오디오가 더 빨리 사라지고, 값이 1.0보다 작으면 오디오가 더 느리게 사라집니다. 기본값은 1.0입니다.
+    // 거리별 볼륨 감소 강도 (1 = 기본)
     [SerializeField] private float audioFadeIntensityByDistanceaudio = 1.0f;
 
-    //캐싱할 채널 이름
-    public string positionalChannelName;   // 디폴트
-    private string groupChannelName;        // 무전기용
+    /// <summary> 거리 기반 채널 (기본 음성 채팅) </summary>
+    public string positionalChannelName;
+
+    // 그룹 채널 (무전기) 
+    private string groupChannelName;
     
+    // 초기화 판단 변수
     private bool vivoxInitialized = false;
+    // 그룹 채널 조인 판단 변수
     private bool isGroupJoined;
+    // 거리 채널 조인 판단 변수
     private bool isPositionalJoined;
 
+    /// <summary> 참가자 리스트 변경 이벤트 </summary>
     public Action<List<VivoxParticipant>> OnParticipantChangedEvent;
+
+    /// <summary> 말하기 감지 이벤트 </summary>
     public Action<string, bool> OnSpeechDetectedEvent;
-    
-    public List<VivoxParticipant> participantsList; 
-    
+
+    /// <summary> 현재 채널 참가자 목록 </summary>
+    public List<VivoxParticipant> participantsList;
+
     private async void Awake()
     {
+        // 싱글톤 유지
         if (Instance != null && Instance != this)
         {
             Destroy(gameObject);
             return;
         }
+
         Instance = this;
         DontDestroyOnLoad(gameObject);
 
@@ -46,38 +60,46 @@ public class VivoxManager : MonoBehaviour
 
     private void Start()
     {
+        // 참가자 입장/퇴장 이벤트 등록
         VivoxService.Instance.ParticipantAddedToChannel += OnParticipantAdded;
         VivoxService.Instance.ParticipantRemovedFromChannel += OnParticipantRemoved;
     }
-
+    
+    // 참가자 입장 이벤트 발생 시 실행될 메서드
     private void OnParticipantAdded(VivoxParticipant participant)
     {
+        // 참가자 추가 후 UI 갱신
         participantsList.Add(participant);
         OnParticipantChangedEvent?.Invoke(participantsList);
     }
-
+    
+    // 참가자 퇴장 이벤트 발생 시 실행될 메서드
     private void OnParticipantRemoved(VivoxParticipant participant)
     {
+        // 참가자 제거 후 UI 갱신
         participantsList.Remove(participant);
         OnParticipantChangedEvent?.Invoke(participantsList);
     }
-    
+
+    /// <summary>
+    /// 채널 송신 대상 변경 (무전기 <> 거리채팅)
+    /// </summary>
     public async Task SwitchChannelAsync(bool isWalkieTalkie)
     {
         if (isWalkieTalkie)
         {
+            // 무전기 채널로 송신
             await VivoxService.Instance.SetChannelTransmissionModeAsync(TransmissionMode.Single, groupChannelName);
-            Debug.Log("vivox 무전기로 전환");
         }
         else
         {
+            // 거리 기반 채널로 송신
             await VivoxService.Instance.SetChannelTransmissionModeAsync(TransmissionMode.Single, positionalChannelName);
-            Debug.Log("vivox 포지셔널 전환");
         }
     }
 
     /// <summary>
-    /// Vivox 서버 초기화 함수 > UGS 초기화 이후에 호출되어야함
+    /// Vivox 초기화 *UGS 초기화 이후 호출*
     /// </summary>
     public async Task InitializeAsync()
     {
@@ -86,7 +108,7 @@ public class VivoxManager : MonoBehaviour
     }
 
     /// <summary>
-    /// Vivox 로그인 함수 > Vivox 초기화 이후에 호출되어야함
+    /// Vivox 로그인
     /// </summary>
     public async Task VivoxLoginAsync()
     {
@@ -94,52 +116,52 @@ public class VivoxManager : MonoBehaviour
 
         try
         {
+            // 표시 이름 설정 후 로그인
             var options = new LoginOptions()
             {
                 DisplayName = AuthManager.Instance.userName
             };
+
             await VivoxService.Instance.LoginAsync(options);
-            Debug.Log("Vivox 로그인");
         }
         catch (Exception e)
         {
             Debug.LogError($"Vivox 로그인 실패 : {e}");
         }
     }
-    
+
     /// <summary>
-    /// Vivox 로그아웃 함수
+    /// Vivox 로그아웃
     /// </summary>
     public async Task VivoxLogoutAsync()
     {
         if (!VivoxService.Instance.IsLoggedIn) return;
+
         try
         {
             await VivoxService.Instance.LogoutAsync();
-            Debug.Log("Vivox 로그아웃");
         }
-        catch (Exception e)
+        catch (Exception)
         {
             Debug.LogError("Vivox 로그아웃 실패");
         }
     }
 
     /// <summary>
-    /// <br> Vivox 채널 Join/Create 함수 Vivox는 별도로 채널을 만들지 않아도 조인시 해당 채널명이 없으면 새로 만듭니다. </br>
-    /// <br> 그룹 채널로 거리에 상관 없는 무전기 채널로 사용될 예정입니다. </br>
+    /// 그룹 채널 참여 (무전기용)
     /// </summary>
-    /// <param name="joinCode"> 채널 이름은 서버의 조인코드 기반입니다. </param>
     public async Task VivoxJoinGroupChannelAsync(string joinCode)
     {
         if (!vivoxInitialized || !VivoxService.Instance.IsLoggedIn) return;
 
+        // 조인코드 기반 채널명 생성
         groupChannelName = joinCode + "_group";
 
         try
         {
+            // 채널 없으면 자동 생성 후 참여
             await VivoxService.Instance.JoinGroupChannelAsync(groupChannelName, ChatCapability.AudioOnly);
             isGroupJoined = true;
-            Debug.Log($"Vivox 그룹 채널 참여 완료: {groupChannelName}");
         }
         catch (Exception e)
         {
@@ -147,53 +169,59 @@ public class VivoxManager : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// 거리 기반 채널 참여
+    /// </summary>
     public async Task VivoxJoinPositionalChannelAsync(string joinCode)
     {
         if (!vivoxInitialized || !VivoxService.Instance.IsLoggedIn) return;
-        
+
         positionalChannelName = joinCode + "_positional";
         isPositionalJoined = true;
+
         try
         {
+            // 거리 기반 오디오 설정 적용 후 채널 참여
             await VivoxService.Instance.JoinPositionalChannelAsync(
                 positionalChannelName,
                 ChatCapability.AudioOnly,
-                new Channel3DProperties
-                (
-                    audibleDistance,
-                    conversationalDistance,
-                    audioFadeIntensityByDistanceaudio,
-                    AudioFadeModel.InverseByDistance)
-                );
-            Debug.Log($"Vivox 포지셔널 채널 참여 완료: {positionalChannelName}");
+                new Channel3DProperties(
+                    audibleDistance,              // 최대 거리
+                    conversationalDistance,       // 대화 거리
+                    audioFadeIntensityByDistanceaudio, // 감쇠 강도
+                    AudioFadeModel.InverseByDistance // 거리 기반 감소 방식
+                )
+            );
         }
         catch (Exception e)
         {
             Debug.LogError($"Vivox 포지셔널 채널 참여 실패 {e}");
         }
-        
     }
-    
-    
+
     /// <summary>
-    /// 모든 채널 떠나기 함수 > 로비를 떠날 때 호출되어야함
+    /// 모든 채널 나가기
     /// </summary>
-    public async Task VivoxLeaveAllChannelsAsync() {
-        if (isGroupJoined) await VivoxService.Instance.LeaveChannelAsync(groupChannelName);
-        if (isPositionalJoined) await VivoxService.Instance.LeaveChannelAsync(positionalChannelName);
+    public async Task VivoxLeaveAllChannelsAsync()
+    {
+        // 참여 중인 채널만 Leave
+        if (isGroupJoined)
+            await VivoxService.Instance.LeaveChannelAsync(groupChannelName);
+
+        if (isPositionalJoined)
+            await VivoxService.Instance.LeaveChannelAsync(positionalChannelName);
+
         isGroupJoined = isPositionalJoined = false;
     }
-    
+
     /// <summary>
-    /// Vivox 채널 leave 함수 
+    /// 특정 채널 나가기
     /// </summary>
-    /// <param name="channelName">채널 이름은 서버의 조인코드입니다.</param>
     public async Task VivoxLeaveChannelAsync(string channelName)
     {
         try
         {
             await VivoxService.Instance.LeaveChannelAsync(channelName);
-            Debug.Log($"Vivox 채널 떠남: {channelName}");
         }
         catch (Exception e)
         {

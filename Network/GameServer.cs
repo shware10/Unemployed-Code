@@ -13,6 +13,7 @@ using UnityEngine.SceneManagement;
 using UnityEngine.Tilemaps;
 using Random = UnityEngine.Random;
 
+/// <summary> 서버 상태 열거형 </summary>
 public enum ServerState
 {
     Lobby,
@@ -23,53 +24,42 @@ public enum ServerState
     GameOver,
 }
 
+/// <summary>
+/// Netcode 네트워크 API를 바탕으로 동기화를 관리하는 싱글턴 클래스
+/// </summary>
 public class GameServer : NetworkBehaviour
 {
     public static GameServer Instance;
 
-    /// <summary>
-    /// clientId : userdata 맵
-    /// </summary>
+    /// <summary> clientId : userdata 맵 </summary>
     public NetworkList<UserData> userList = new();
 
-    /// <summary>
-    /// 플레이어 연결 변화 이벤트
-    /// </summary>
+    /// <summary> 플레이어 연결 변화 이벤트 </summary>
     public event Action<FixedString64Bytes, bool> OnConnectionChangedEvent;
 
-    /// <summary>
-    /// 게임 상태 변화 이벤트
-    /// </summary>
+    /// <summary> 게임 상태 변화 이벤트 </summary>
     public event Action<ServerState, ServerState> OnStateChangedEvent;
 
-    /// <summary>
-    /// 타이머 변화 이벤트
-    /// </summary>
+    /// <summary> 타이머 변화 이벤트 </summary>
     public event Action<int> OnTimerChangedEvent;
 
-    /// <summary>
-    ///  맵 변화 이벤트
-    /// </summary>
+    /// <summary> 맵 변화 이벤트 </summary>
     public event Action<int> OnMapChangedEvent;
 
-    /// <summary>
-    /// 게임 상태(자동 동기화)
-    /// </summary>
+    /// <summary> 게임 상태 자동 동기화 </summary>
     public NetworkVariable<ServerState> curState = new(ServerState.Lobby);
 
+    /// <summary> 현재 생존 플레이어 수 </summary>
     public NetworkVariable<int> alivePlayers = new();
 
-    public NetworkVariable<int> time = new(40); // 5분
+    public NetworkVariable<int> time = new(40);
 
+    /// <summary> 현재 맵 인덱스 </summary>
     public NetworkVariable<int> MapIdx = new(0);
 
     private WaitForSeconds second;
-
     private Coroutine TimerRoutine;
-
-
     private Scene curScene;
-
     private string[] mapList = new string[4]
     {
         "IngameScene_Subway-1(Safe)",
@@ -80,6 +70,7 @@ public class GameServer : NetworkBehaviour
 
     void Awake()
     {
+        // 싱글톤
         if (Instance != null && Instance != this)
         {
             Destroy(gameObject);
@@ -97,10 +88,10 @@ public class GameServer : NetworkBehaviour
         // NetworkVariables 계열은 여기서 등록
         // 값은 서버에서 바꾸고 클라에서는 리슨
 
-        userList.OnListChanged += OnUserListChanged;
+        userList.OnListChanged  += OnUserListChanged;
         curState.OnValueChanged += OnGameStateChanged;
-        time.OnValueChanged += OnTimerChanged;
-        MapIdx.OnValueChanged += OnMapChanged;
+        time.OnValueChanged     += OnTimerChanged;
+        MapIdx.OnValueChanged   += OnMapChanged;
 
 
         if (IsServer) //연결여부는 각 클라에서 받고 연결 끊기는 서버만 리슨
@@ -109,11 +100,15 @@ public class GameServer : NetworkBehaviour
         }
     }
 
+    // 맵 변경 이벤트 발생 시 처리될 함수
     private void OnMapChanged(int previousValue, int newValue)
     {
         OnMapChangedEvent?.Invoke(newValue);
     }
 
+    /// <summary>
+    /// clientId > username 조회
+    /// </summary>
     public string GetUserName(ulong clientId)
     {
         foreach (UserData userData in userList)
@@ -124,318 +119,309 @@ public class GameServer : NetworkBehaviour
         return null;
     }
 
-    #region Map
+#region Map
 
     /// <summary>
-    /// 호출하면 모두 같이 랜덤맵으로 로드됩니다.
+    /// 서버에서 맵 로드 > 모든 클라 동기화
     /// </summary>
     [ServerRpc(RequireOwnership = false)]
     public void NetworkMapLoadServerRpc(bool isSafeZone)
     {
+        // 안전지대면 0번, 아니면 랜덤 맵 선택
         int idx = isSafeZone ? 0 : Random.Range(1, mapList.Length);
-        string nextSceneName = mapList[idx];
 
-        NetworkManager.SceneManager.LoadScene(nextSceneName, LoadSceneMode.Single);
+        // 모든 클라이언트 씬 동기화 로드
+        NetworkManager.SceneManager.LoadScene(mapList[idx], LoadSceneMode.Single);
 
+        // 현재 맵 인덱스 동기화
         MapIdx.Value = idx;
     }
 
+#endregion
 
-    #endregion
 
-    #region Connection
+#region Connection
 
     /// <summary>
-    /// 스폰된 플레이어를 서버에 바인드하는 함수입니다. > 커넥션/게임상태를 리슨합니다.
+    /// 플레이어 객체를 서버 이벤트에 연결
+    /// (UI, 상태, 타이머 리스너 등록)
     /// </summary>
-    /// <param name="player"></param>
     public void BindServer(GameObject player)
     {
-        IConnectionListener[] Clisteners = player.GetComponentsInChildren<IConnectionListener>(true);
-        IServerStateListener[] Slisteners = player.GetComponentsInChildren<IServerStateListener>(true);
-        ITimerListener[] TListeners = player.GetComponentsInChildren<ITimerListener>(true);
-        
-        foreach (var listener in Clisteners) OnConnectionChangedEvent += listener.OnConnctionChanged;
-        foreach (var listener in Slisteners) OnStateChangedEvent += listener.OnStateChanged;
-        foreach (var listener in TListeners) OnTimerChangedEvent += listener.OnTimerChanged;
+        // 플레이어 내부 리스너 찾아서 서버 이벤트에 등록
+        foreach (var l in player.GetComponentsInChildren<IConnectionListener>(true))
+            OnConnectionChangedEvent += l.OnConnctionChanged;
+
+        foreach (var l in player.GetComponentsInChildren<IServerStateListener>(true))
+            OnStateChangedEvent += l.OnStateChanged;
+
+        foreach (var l in player.GetComponentsInChildren<ITimerListener>(true))
+            OnTimerChangedEvent += l.OnTimerChanged;
     }
 
-    /// <summary>
-    /// 유저 접속시 -> 리스트 변화
-    /// </summary>
-    /// <param name="change"></param>
+
+    // 유저 리스트 변화 이벤트 발생 시 처리될 함수
     private void OnUserListChanged(NetworkListEvent<UserData> change)
     {
-        switch (change.Type)
-        {
-            case NetworkListEvent<UserData>.EventType.Add:
-                OnConnectionChangedEvent?.Invoke(change.Value.username, true);
-                break;
-            case NetworkListEvent<UserData>.EventType.Remove:
-                OnConnectionChangedEvent?.Invoke(change.Value.username, false);
-                break;
-        }
+        // 유저 추가/삭제 시 UI 등에 이벤트 전달
+        if (change.Type == NetworkListEvent<UserData>.EventType.Add)
+            OnConnectionChangedEvent?.Invoke(change.Value.username, true);
+
+        if (change.Type == NetworkListEvent<UserData>.EventType.Remove)
+            OnConnectionChangedEvent?.Invoke(change.Value.username, false);
     }
 
     /// <summary>
-    /// 각 클라이언트가 접속 시 유저데이터를 보내는 함수
+    /// 클라이언트 > 서버 유저 데이터 전달
     /// </summary>
-    /// <param name="userName"></param>
-    /// <param name="rpcParams"></param>
     [ServerRpc(RequireOwnership = false)]
     public void SendDataServerRpc(FixedString64Bytes userName, ServerRpcParams rpcParams = default)
     {
-        int senderId = (int)rpcParams.Receive.SenderClientId;
-        //리스트에 해당 클라 정보 추가 => OnUserListChanged
+        // 클라이언트가 보낸 username으로 유저 데이터 생성 후 리스트에 추가
         userList.Add(new UserData(userName, rpcParams.Receive.SenderClientId));
-
-        /*
-        if (NetworkManager.Singleton.ConnectedClientsList.Count == 4)
-        {
-            curState.Value = ServerState.GameStart;
-        }
-        */
     }
 
-    /// <summary>
-    /// 클라이언트 접속이 끊길 때 호출되는 함수
-    /// </summary>
-    /// <param name="clientId"></param>
+    // 클라이언트 연결 해제 이벤트 발생 시 처리될 함수
     private void OnClientDisconnected(ulong clientId)
     {
-        //리스트 에서 해당 클라 제거 => OnUserListChanged
+        // 연결 끊긴 유저 리스트에서 제거
         foreach (UserData user in userList)
         {
-            if (user.clientId == clientId) userList.Remove(user);
+            if (user.clientId == clientId)
+                userList.Remove(user);
         }
 
-        if (curState.Value != ServerState.Lobby) alivePlayers.Value -= 1;
+        // 게임 중이면 생존자 수 감소
+        if (curState.Value != ServerState.Lobby)
+            alivePlayers.Value -= 1;
     }
 
-    #endregion
+#endregion
 
-    #region Server State
+
+#region Server State
 
     /// <summary>
-    /// 게임상태 변경 함수
-    /// 호출예시 => 플레이어 안전구역 콜라이더 감지 >> SwithStateServerRpc(GameState.SessionEnd)
+    /// 상태 변경 (클라 → 서버 요청)
     /// </summary>
-    /// <param name="newState"></param>
     [ServerRpc(RequireOwnership = false)]
     public void SwitchStateServerRpc(ServerState newState)
     {
+        // 서버 상태 변경
         curState.Value = newState;
     }
-
-    /// <summary>
-    /// 상태 변경시 호출할 델리게이트 함수
-    /// </summary>
-    /// <param name="oldState"></param>
-    /// <param name="newState"></param>
+    
+    // 게임 상태 변경 이벤트 발생 시 처리될 함수
     private void OnGameStateChanged(ServerState oldState, ServerState newState)
     {
+        // 모든 리스너에게 상태 변경 알림
         OnStateChangedEvent?.Invoke(oldState, newState);
-        if (IsServer)
+
+        if (!IsServer) return;
+
+        switch (newState)
         {
-            switch (newState)
-            {
-                case ServerState.SessionStart:
-                    alivePlayers.Value = NetworkManager.Singleton.ConnectedClientsList.Count;
-                    TimerRoutine = StartCoroutine(TimerStart());
-                    break;
-                case ServerState.GameOver:
-                    // 타이머 종료
-                    StartCoroutine(GameOverRoutine());
-                    break;
-                case ServerState.EscapeStart:
-                    // 타이머 종료
-                    StopCoroutine(TimerRoutine);
-                    break;
-                case ServerState.SessionEnd:
-                    // 죽은 애들 전부 살리기
-                    StartCoroutine(SessionEndRoutine());
-                    break;
-            }
+            case ServerState.SessionStart:
+                // 현재 접속 인원 = 생존자 수
+                alivePlayers.Value = NetworkManager.Singleton.ConnectedClientsList.Count;
+
+                // 타이머 시작
+                TimerRoutine = StartCoroutine(TimerStart());
+                break;
+
+            case ServerState.GameOver:
+                // 게임 종료 처리
+                StartCoroutine(GameOverRoutine());
+                break;
+
+            case ServerState.EscapeStart:
+                // 타이머 중지
+                StopCoroutine(TimerRoutine);
+                break;
+
+            case ServerState.SessionEnd:
+                // 세션 종료 > 리스폰 처리
+                StartCoroutine(SessionEndRoutine());
+                break;
         }
     }
-
-    IEnumerator GameOverRoutine()
+    
+    // 게임 오버 상태 전환시 실행될 루틴
+    IEnumerator GameOverRoutine() 
     {
         StopCoroutine(TimerRoutine);
         DieAliveAll();
         yield return new WaitForSeconds(3f);
+        // 기차 애니메이션 실행
         TrainManager.Instance?.RequestStartTrainInDungeonServerRpc();
     }
-
+    
     IEnumerator SessionEndRoutine()
     {
-        yield return new WaitForSeconds(3f);
+        yield return new WaitForSeconds(3f); 
         RespawnInSafeZone();
     }
-    
 
     IEnumerator TimerStart()
     {
+        // 초기 시간 설정
         time.Value = 600;
+
         while (true)
         {
             yield return second;
+
+            // 매초 시간 감소
             time.Value -= 1;
-            Debug.Log($"{time.Value}");
         }
     }
-
-    public void OnTimerChanged(int previousValue, int newValue)
+    
+    /// <summary>
+    /// 타이머 변화 이벤트 발생 시 처리될 함수
+    /// </summary>
+    public void OnTimerChanged(int _, int newValue)
     {
+        // 30초 이하부터 UI 업데이트
         if (newValue <= 30)
-        {
             OnTimerChangedEvent?.Invoke(newValue);
-        }
 
         if (newValue == 0)
         {
+            // 타이머 종료 > 게임 종료 상태 전환
             StopCoroutine(TimerRoutine);
-        
-            if(IsServer) curState.Value = ServerState.GameOver;
+            if (IsServer) curState.Value = ServerState.GameOver;
         }
     }
 
-    
-
     #endregion
 
-    #region Player
 
+    #region Player
+    
+    /// <summary>
+    /// 모든 생존 플레이어 사망 처리
+    /// </summary>
     public void DieAliveAll()
     {
         foreach (UserData user in userList)
         {
-            if (user.isAlive == true)
-            {
-                var player = NetworkManager.Singleton.ConnectedClients[user.clientId].PlayerObject;
+            if (!user.isAlive) continue;
 
-                player.gameObject.GetComponent<PlayerPresenterHandler>().SetAcitveCharacter(false);
+            var player = NetworkManager.Singleton.ConnectedClients[user.clientId].PlayerObject;
 
-                DieClientRpc(player.NetworkObjectId);
-            }
+            // 캐릭터 비활성화
+            player.GetComponent<PlayerPresenterHandler>().SetAcitveCharacter(false);
+
+            // 모든 클라에 사망 상태 전달
+            DieClientRpc(player.NetworkObjectId);
         }
     }
-    
+
     /// <summary>
-    /// 플레이어 hp가 0이 되면 서버에 호출할 함수
+    /// 플레이어 사망 처리
     /// </summary>
     [ServerRpc(RequireOwnership = false)]
     public void DieServerRpc(ServerRpcParams rpcParams = default)
     {
+        // 생존자 수 감소
         alivePlayers.Value -= 1;
 
-        var player = NetworkManager.Singleton.ConnectedClients[rpcParams.Receive.SenderClientId].PlayerObject;
+        ulong clientId = rpcParams.Receive.SenderClientId;
+        var player = NetworkManager.Singleton.ConnectedClients[clientId].PlayerObject;
 
-        player.gameObject.GetComponent<PlayerPresenterHandler>().SetAcitveCharacter(false);
+        // 서버에서 캐릭터 비활성화
+        player.GetComponent<PlayerPresenterHandler>().SetAcitveCharacter(false);
 
+        // 클라이언트에도 반영
         DieClientRpc(player.NetworkObjectId);
 
-        ulong clientId = rpcParams.Receive.SenderClientId;
-
-        for (int i = 0; i < userList.Count; ++i)
+        // userList 상태 업데이트 (isAlive = false)
+        for (int i = 0; i < userList.Count; i++)
         {
             if (userList[i].clientId == clientId)
             {
-                var newUser = userList[i];
-                newUser.isAlive = false;
-                userList[i] = newUser;
+                var u = userList[i];
+                u.isAlive = false;
+                userList[i] = u;
                 break;
             }
         }
 
-        if (alivePlayers.Value == 0) curState.Value = ServerState.GameOver;
-    }
-
-    [ClientRpc]
-    private void DieClientRpc(ulong networkObjectId)
-    {
-        if (NetworkManager.Singleton.SpawnManager.SpawnedObjects.TryGetValue(networkObjectId, out var netObj))
-        {
-            netObj.gameObject.GetComponent<PlayerPresenterHandler>().SetAcitveCharacter(false);
-        }
-    }
-
-    private void RespawnInSafeZone()
-    {
-        for(int i = 0; i < userList.Count; ++i)
-        {
-            if (!userList[i].isAlive) // 죽어있던 유저 탐색
-            {
-                var newUser = userList[i];
-                newUser.isAlive = true;
-                userList[i] = newUser;
-                
-                var player = NetworkManager.Singleton.ConnectedClients[userList[i].clientId].PlayerObject;
-                
-                RespawnClientRpc(player.NetworkObjectId, Vector3.zero);
-            }
-        }
-    }
-
-
-    /// <summary>
-    /// 플레이어 머리를 가져가서 리스폰할때 호출할 함수
-    /// </summary>
-    [ServerRpc(RequireOwnership = false)]
-    public void RespawnServerRpc(ulong clientId, Vector3 spawnPosition, ServerRpcParams rpcParams = default)
-    {
-        alivePlayers.Value += 1;
-
-        for(int i = 0; i < userList.Count; ++i)
-        {
-            if (userList[i].clientId == clientId)
-            {
-                var newUser = userList[i];
-                newUser.isAlive = true;
-                userList[i] = newUser;
-                break;
-            }
-        }
-        
-        var player = NetworkManager.Singleton.ConnectedClients[clientId].PlayerObject;
-        
-        RespawnClientRpc(player.NetworkObjectId, spawnPosition);
-    }
-
-    [ClientRpc]
-    private void RespawnClientRpc(ulong networkObjectId, Vector3 spawnPosition)
-    {
-        if (NetworkManager.Singleton.SpawnManager.SpawnedObjects.TryGetValue(networkObjectId, out var netObj))
-        {
-            PlayerPresenterHandler playerPresenterHandler = netObj.gameObject.GetComponent<PlayerPresenterHandler>();
-            netObj.gameObject.transform.position = Vector3.zero;
-            playerPresenterHandler.SetAcitveCharacter(true);
-            playerPresenterHandler.SetisRespawnState(true);
-            
-            Debug.Log("리스폰됨");
-        }
+        // 전원 사망 시 게임 종료
+        if (alivePlayers.Value == 0)
+            curState.Value = ServerState.GameOver;
     }
     
     /// <summary>
-    /// 정산 시 표시될 스코어와 액션 수
+    /// 플레이어 사망 시 비활성화 동기화
+    /// </summary>
+    /// <param name="networkObjectId"></param>
+    /// <returns></returns>
+    [ClientRpc]
+    private void DieClientRpc(ulong networkObjectId)
+    {
+        // 해당 플레이어 찾아서 비활성화
+        if (NetworkManager.Singleton.SpawnManager.SpawnedObjects.TryGetValue(networkObjectId, out var netObj))
+        {
+            netObj.GetComponent<PlayerPresenterHandler>().SetAcitveCharacter(false);
+        }
+    }
+    /// <summary>
+    /// 사망 유저 리스폰
+    /// </summary>
+    private void RespawnInSafeZone()
+    {
+        for (int i = 0; i < userList.Count; i++)
+        {
+            if (userList[i].isAlive) continue;
+
+            // 사망 > 생존 상태로 복구
+            var u = userList[i];
+            u.isAlive = true;
+            userList[i] = u;
+
+            var player = NetworkManager.Singleton.ConnectedClients[u.clientId].PlayerObject;
+
+            // 클라이언트 리스폰 처리
+            RespawnClientRpc(player.NetworkObjectId, Vector3.zero);
+        }
+    }
+
+    [ClientRpc]
+    private void RespawnClientRpc(ulong id, Vector3 pos)
+    {
+        if (NetworkManager.Singleton.SpawnManager.SpawnedObjects.TryGetValue(id, out var netObj))
+        {
+            var handler = netObj.GetComponent<PlayerPresenterHandler>();
+
+            // 위치 초기화 + 활성화
+            netObj.transform.position = pos;
+            handler.SetAcitveCharacter(true);
+            handler.SetisRespawnState(true);
+        }
+    }
+
+    /// <summary>
+    /// 점수/행동량 업데이트 함수
     /// </summary>
     [ServerRpc(RequireOwnership = false)]
     public void OnScoredServerRpc(int score, int action, ServerRpcParams rpcParams = default)
     {
         ulong clientId = rpcParams.Receive.SenderClientId;
 
-        for(int i = 0; i < userList.Count; ++i)
+        // 점수 / 행동량 업데이트
+        for (int i = 0; i < userList.Count; i++)
         {
             if (userList[i].clientId == clientId)
             {
-                var newUser = userList[i];
-                newUser.action = action;
-                newUser.score = score;
-                userList[i] = newUser;
+                var u = userList[i];
+                u.score = score;
+                u.action = action;
+                userList[i] = u;
                 break;
             }
         }
     }
 
-    #endregion
+#endregion
 }
